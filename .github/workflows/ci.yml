@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: pytest -q
+      - run: python -m credit_risk.train --card /tmp/MODEL_CARD.md
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t credit-risk .
+      - name: Smoke test scoring endpoint
+        run: |
+          docker run -d --name app -p 8000:8000 credit-risk
+          for i in $(seq 1 30); do curl -fs localhost:8000/health && break; sleep 1; done
+          EXAMPLE=$(curl -fs localhost:8000/schema | python -c "import sys,json; print(json.dumps(json.load(sys.stdin)['example']))")
+          curl -fs -X POST localhost:8000/score -H 'Content-Type: application/json' -d "$EXAMPLE" | python -c "import sys,json; r=json.load(sys.stdin); assert r['decision'] in ('approve','refer/decline'); print(r['decision'], r['probability_of_default'])"
