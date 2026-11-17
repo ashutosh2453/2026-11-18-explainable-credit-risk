@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "explainable-credit-risk"
+version = "0.1.0"
+description = "Calibrated, cost-sensitive credit-risk scoring with SHAP explanations, actionable recourse and a fairness audit"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = [
+    "scikit-learn>=1.5",
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "shap>=0.46",
+    "joblib>=1.4",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[tool.setuptools.packages.find]
+include = ["credit_risk*"]
+
+[tool.setuptools.package-data]
+credit_risk = ["static/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::UserWarning", "ignore::DeprecationWarning"]
