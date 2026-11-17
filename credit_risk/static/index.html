@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Credit Risk Explainer</title>
+<style>
+  :root { --bg:#f5f5f2; --panel:#fff; --ink:#1b1b19; --muted:#6a6a64; --line:#e0e0da;
+          --risk:#b42318; --riskbg:#fde8e6; --safe:#1f7a4d; --safebg:#e3f4ea; --accent:#2d55c8; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#131312; --panel:#1c1c1a; --ink:#ececea; --muted:#9b9b95; --line:#32322e;
+            --risk:#ff9d92; --riskbg:#3d1d19; --safe:#7fd6a5; --safebg:#173226; --accent:#8fa9ff; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  main { max-width:1150px; margin:0 auto; padding:20px 16px 60px; display:grid; gap:16px; grid-template-columns:1fr; }
+  @media (min-width:960px) { main { grid-template-columns:380px 1fr; } }
+  header { grid-column:1/-1; } h1 { font-size:20px; margin:0; } h2 { font-size:16px; margin:0 0 10px; } h3 { font-size:14px; margin:16px 0 6px; }
+  header p { margin:4px 0 0; color:var(--muted); }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; min-width:0; }
+  label { display:block; font-size:13px; color:var(--muted); margin-top:8px; }
+  input, select, button { font:inherit; color:inherit; }
+  input, select { width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); }
+  button { margin-top:12px; padding:8px 14px; border:0; border-radius:6px; background:var(--accent); color:#fff; cursor:pointer; }
+  .tabs button { background:none; color:var(--accent); padding:4px 0; margin:0 14px 0 0; }
+  .tabs button.on { color:var(--ink); font-weight:600; border-bottom:2px solid var(--ink); border-radius:0; }
+  .decision { font-size:20px; font-weight:700; padding:10px 14px; border-radius:8px; }
+  .decision.approve { background:var(--safebg); color:var(--safe); } .decision.decline { background:var(--riskbg); color:var(--risk); }
+  .meter { height:10px; background:var(--line); border-radius:99px; position:relative; margin:10px 0 2px; }
+  .meter span { position:absolute; inset:0 auto 0 0; border-radius:99px; background:var(--risk); }
+  .meter i { position:absolute; top:-4px; bottom:-4px; width:2px; background:var(--ink); }
+  .bars { display:grid; grid-template-columns:minmax(120px,1.2fr) 2fr; gap:4px 10px; align-items:center; font-size:13px; }
+  .bar { position:relative; height:16px; }
+  .bar::before { content:""; position:absolute; left:50%; top:0; bottom:0; width:1px; background:var(--line); }
+  .bar span { position:absolute; top:2px; height:12px; border-radius:2px; }
+  .bar span.up { left:50%; background:var(--risk); } .bar span.down { right:50%; background:var(--safe); }
+  .muted { color:var(--muted); } .small { font-size:13px; }
+  ul { padding-left:18px; margin:6px 0; }
+  .option { border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin:6px 0; }
+  table { width:100%; border-collapse:collapse; font-size:13px; } th, td { text-align:left; padding:5px 6px; border-bottom:1px solid var(--line); }
+  .pass { color:var(--safe); font-weight:600; } .fail { color:var(--risk); font-weight:600; }
+  .err { color:var(--risk); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Explainable Credit-Risk Scorer</h1>
+    <p>Calibrated default probability, SHAP reasons, actionable recourse and a fairness audit. Trained on the public German Credit dataset; for demonstration only, not real lending.</p>
+  </header>
+  <section>
+    <h2>Applicant</h2>
+    <form id="form"></form>
+    <button id="scoreBtn">Score applicant</button>
+    <div id="formErr" class="err small"></div>
+  </section>
+  <section>
+    <div class="tabs"><button class="on" data-tab="result">Decision</button><button data-tab="model">Model &amp; fairness</button></div>
+    <div id="result"><p class="muted">Fill in the applicant (pre-filled with a test-set example) and score.</p></div>
+    <div id="model" hidden></div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let schema;
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(Array.isArray(body.detail) ? body.detail.map(d => d.msg || d).join("; ") : (body.detail || r.statusText));
+  return body;
+}
+
+function buildForm() {
+  const f = $("form"); const ex = schema.example;
+  f.innerHTML = schema.order.map(name => {
+    const num = schema.numeric[name], cat = schema.categorical[name];
+    if (num) return `<label>${esc(num.label)}<input type="number" name="${name}" min="${num.min}" max="${num.max}" value="${esc(ex[name])}" required></label>`;
+    return `<label>${esc(cat.label)}<select name="${name}">${cat.values.map(v => `<option${v === ex[name] ? " selected" : ""}>${esc(v)}</option>`).join("")}</select></label>`;
+  }).join("");
+}
+
+function applicant() {
+  const out = {};
+  for (const el of $("form").elements) out[el.name] = schema.numeric[el.name] ? Number(el.value) : el.value;
+  return out;
+}
+
+function renderResult(r) {
+  const ok = r.decision === "approve";
+  const contribs = r.explanation.contributions.slice(0, 10);
+  const maxAbs = Math.max(...contribs.map(c => Math.abs(c.shap)), 0.01);
+  $("result").innerHTML = `
+    <div class="decision ${ok ? "approve" : "decline"}">${ok ? "Approve" : "Refer / decline"}</div>
+    <div class="meter" title="probability of default"><span style="width:${(r.probability_of_default * 100).toFixed(1)}%"></span><i style="left:${r.threshold * 100}%"></i></div>
+    <div class="small muted">Probability of default <b>${(r.probability_of_default * 100).toFixed(1)}%</b> &middot; decline threshold ${(r.threshold * 100).toFixed(0)}% (cost-optimised: a bad approval costs 5&times; a missed good customer)</div>
+    ${r.reason_codes.length ? `<h3>Principal reasons</h3><ol>${r.reason_codes.map(x => `<li>${esc(x)}</li>`).join("")}</ol>` : ""}
+    <h3>Why: SHAP contributions <span class="muted small">(red raises risk, green lowers it; log-odds)</span></h3>
+    <div class="bars">${contribs.map(c => `
+      <div title="${esc(c.feature)}">${esc(c.label)}: <b>${esc(c.value)}</b></div>
+      <div class="bar"><span class="${c.shap > 0 ? "up" : "down"}" style="width:${(Math.abs(c.shap) / maxAbs * 50).toFixed(1)}%"></span></div>`).join("")}</div>
+    ${ok ? "" : `<h3>What would change the decision</h3>${r.recourse.length ? r.recourse.map(o => `
+      <div class="option">${o.changes.map(c => esc(c.action)).join(" + ")}
+      <div class="small muted">new default probability ${(o.new_probability * 100).toFixed(1)}% &middot; effort ${o.total_effort}</div></div>`).join("")
+      : `<p class="muted small">No combination of up to three realistic changes reaches approval for this applicant.</p>`}`}`;
+}
+
+async function renderModel() {
+  const m = await api("/model");
+  const mt = m.metrics;
+  $("model").innerHTML = `
+    <h3>Performance (held-out test set, n=${mt.test_size})</h3>
+    <table><tr><th>ROC-AUC</th><td>${mt.roc_auc}</td><th>Brier</th><td>${mt.brier}</td></tr>
+    <tr><th>Approval rate</th><td>${(mt.approval_rate * 100).toFixed(1)}%</td><th>Default rate among approved</th><td>${(mt.bad_rate_among_approved * 100).toFixed(1)}%</td></tr>
+    <tr><th>Expected cost</th><td>${mt.expected_cost}</td><th>Reject-all baseline</th><td>${mt.cost_reject_all}</td></tr></table>
+    <p class="small muted">Model: ${esc(mt.model)} (CV AUC ${Object.entries(m.cv_auc).map(([k, v]) => `${esc(k)} ${v}`).join(", ")}), trained ${esc(m.trained_at)}</p>
+    <h3>Global importance (mean |SHAP|)</h3>
+    <table>${m.global_importance.slice(0, 8).map(g => `<tr><td>${esc(g.label)}</td><td>${g.mean_abs_shap}</td></tr>`).join("")}</table>
+    <h3>Fairness audit <span class="muted small">(protected attributes are not model inputs)</span></h3>
+    ${Object.entries(m.fairness).map(([attr, r]) => `
+      <p><b>${esc(attr)}</b>: disparate impact ${r.disparate_impact_ratio ?? "n/a"} &middot; equal-opportunity gap ${r.equal_opportunity_difference ?? "n/a"} &middot;
+      ${r.passes_four_fifths_rule === null ? '<span class="muted">group too small to assess</span>' : r.passes_four_fifths_rule ? '<span class="pass">passes 4/5 rule</span>' : '<span class="fail">fails 4/5 rule</span>'}</p>
+      <table><tr><th>Group</th><th>n</th><th>Approval</th><th>Approval if creditworthy</th><th>Actual default</th></tr>
+      ${r.groups.map(g => `<tr><td>${esc(g.group)}</td><td>${g.n}</td><td>${g.approval_rate}</td><td>${g.approval_rate_if_creditworthy}</td><td>${g.actual_bad_rate}</td></tr>`).join("")}</table>`).join("")}`;
+}
+
+document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("on", x === b));
+  $("result").hidden = b.dataset.tab !== "result";
+  $("model").hidden = b.dataset.tab !== "model";
+  if (b.dataset.tab === "model" && !$("model").innerHTML) renderModel().catch(e => $("model").textContent = e.message);
+});
+
+$("scoreBtn").onclick = async () => {
+  $("formErr").textContent = "";
+  try {
+    renderResult(await api("/score", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(applicant()) }));
+  } catch (e) { $("formErr").textContent = e.message; }
+};
+
+api("/schema").then(s => { schema = s; buildForm(); }).catch(e => $("formErr").textContent = e.message);
+</script>
+</body>
+</html>
