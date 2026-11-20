@@ -71,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     warnings.filterwarnings("ignore", category=UserWarning)
     bundle = build_bundle(seed=args.seed)
     save_bundle(bundle, args.out)
-    args.card.write_text(model_card(bundle), encoding="utf-8")
+    args.card.write_text(model_card(bundle), encoding="utf-8", newline="\n")
     m = bundle.model.metrics
     print(f"{m['model']}: ROC-AUC {m['roc_auc']}, threshold {m['threshold']}, approval {m['approval_rate']:.1%}")
     print(f"artifact -> {args.out}\nmodel card -> {args.card}")
